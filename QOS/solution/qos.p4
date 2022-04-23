@@ -35,13 +35,9 @@ header ethernet_t {
     bit<16>   etherType;
 }
 
-/*
- * TODO: split tos to two fields 6 bit diffserv and 2 bit ecn
- */
 header ipv4_t {
     bit<4>    version;
     bit<4>    ihl;
-    //将tos拆分成diffserv和ecn字段
     bit<6>    diffserv;
     bit<2>    ecn;
     bit<16>   totalLen;
@@ -54,7 +50,6 @@ header ipv4_t {
     ip4Addr_t srcAddr;
     ip4Addr_t dstAddr;
 }
-
 
 struct metadata {
 }
@@ -119,19 +114,80 @@ control MyIngress(inout headers hdr,
         hdr.ipv4.ttl = hdr.ipv4.ttl - 1;
     }
 
-/* TODO: Implement actions for different traffic classes */
-    //udp
-    action udp_f() {
+    /* Default Forwarding */
+    action default_forwarding() {
+        hdr.ipv4.diffserv = 0;
+    }
+
+    /* Expedited Forwarding */
+    action expedited_forwarding() {
         hdr.ipv4.diffserv = 46;
     }
 
-    //tcp
-    action tcp_f() {
+    /* Voice Admit */
+    action voice_admit() {
         hdr.ipv4.diffserv = 44;
     }
-    //默认转发
-    action default_forwarding() {
-        hdr.ipv4.diffserv = 0;
+
+    /* Assured Forwarding */
+    /* Class 1 Low drop probability */
+    action af_11() {
+        hdr.ipv4.diffserv = 10;
+    }
+
+    /* Class 1 Med drop probability */
+    action af_12() {
+        hdr.ipv4.diffserv = 12;
+    }
+
+    /* Class 1 High drop probability */
+    action af_13() {
+        hdr.ipv4.diffserv = 14;
+    }
+
+    /* Class 2 Low drop probability */
+    action af_21() {
+        hdr.ipv4.diffserv = 18;
+    }
+
+    /* Class 2 Med drop probability */
+    action af_22() {
+        hdr.ipv4.diffserv = 20;
+    }
+
+    /* Class 2 High drop probability */
+    action af_23() {
+        hdr.ipv4.diffserv = 22;
+    }
+
+    /* Class 3 Low drop probability */
+    action af_31() {
+        hdr.ipv4.diffserv = 26;
+    }
+
+    /* Class 3 Med drop probability */
+    action af_32() {
+        hdr.ipv4.diffserv = 28;
+    }
+
+    /* Class 3 High drop probability */
+    action af_33() {
+        hdr.ipv4.diffserv = 30;
+    }
+
+    /* Class 4 Low drop probability */
+    action af_41() {
+        hdr.ipv4.diffserv = 34;
+    }
+
+    /* Class 4 Med drop probability */
+    action af_42() {
+        hdr.ipv4.diffserv = 36;
+    }
+
+    /* Class 4 High drop probability */
+    action af_43() {
+        hdr.ipv4.diffserv = 38;
     }
 
     table ipv4_lpm {
@@ -147,16 +203,13 @@ control MyIngress(inout headers hdr,
         default_action = NoAction();
     }
 
-/* TODO: set hdr.ipv4.diffserv on the basis of protocol */
     apply {
-        //判断ipv4头部有效
         if (hdr.ipv4.isValid()) {
-            if(hdr.ipv4.protocol==IP_PROTOCOLS_UDP){//如果协议类型是udp
-                udp_f();
-            }else if(hdr.ipv4.protocol==IP_PROTOCOLS_TCP){//如果协议类型是tcp
-                tcp_f();
-            }else{//否则将diffserv设为默认值
-                default_forwarding();
+            if (hdr.ipv4.protocol == IP_PROTOCOLS_UDP) {
+                expedited_forwarding();
+	    }
+            else if (hdr.ipv4.protocol == IP_PROTOCOLS_TCP) {
+	        voice_admit();
             }
             ipv4_lpm.apply();
         }
@@ -173,21 +226,18 @@ control MyEgress(inout headers hdr,
     apply {  }
 }
 
-
 /*************************************************************************
 *************   C H E C K S U M    C O M P U T A T I O N   **************
 *************************************************************************/
 
 control MyComputeChecksum(inout headers hdr, inout metadata meta) {
-    apply {
-        /* TODO: replace tos with diffserv and ecn */
-        //对checksum进行相应的更改
-        update_checksum(
-            hdr.ipv4.isValid(),
+     apply {
+	update_checksum(
+	    hdr.ipv4.isValid(),
             { hdr.ipv4.version,
-              hdr.ipv4.ihl,
-              hdr.ipv4.diffserv,
-              hdr.ipv4.ecn,
+	      hdr.ipv4.ihl,
+	      hdr.ipv4.diffserv,
+	      hdr.ipv4.ecn,
               hdr.ipv4.totalLen,
               hdr.ipv4.identification,
               hdr.ipv4.flags,
