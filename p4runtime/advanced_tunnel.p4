@@ -2,53 +2,52 @@
 #include <core.p4>
 #include <v1model.p4>
 
+const bit<16> TYPE_MYTUNNEL = 0x1212;
+const bit<16> TYPE_IPV4 = 0x800;
+const bit<32> MAX_TUNNEL_ID = 1 << 16;
+
 /*************************************************************************
 *********************** H E A D E R S  ***********************************
 *************************************************************************/
 
+typedef bit<9>  egressSpec_t;
+typedef bit<48> macAddr_t;
+typedef bit<32> ip4Addr_t;
+
 header ethernet_t {
-    bit<48> dstAddr;
-    bit<48> srcAddr;
-    bit<16> etherType;
+    macAddr_t dstAddr;
+    macAddr_t srcAddr;
+    bit<16>   etherType;
+}
+
+header myTunnel_t {
+    bit<16> proto_id;
+    bit<16> dst_id;
 }
 
 header ipv4_t {
-    bit<4>  version;
-    bit<4>  ihl;
-    bit<8>  diffserv;
-    bit<16> totalLen;
-    bit<16> identification;
-    bit<3>  flags;
-    bit<13> fragOffset;
-    bit<8>  ttl;
-    bit<8>  protocol;
-    bit<16> hdrChecksum;
-    bit<32> srcAddr;
-    bit<32> dstAddr;
-}
-
-header tcp_t {
-    bit<16> srcPort;
-    bit<16> dstPort;
-    bit<32> seqNo;
-    bit<32> ackNo;
-    bit<4>  dataOffset;
-    bit<3>  res;
-    bit<3>  ecn;
-    bit<6>  ctrl;
-    bit<16> window;
-    bit<16> checksum;
-    bit<16> urgentPtr;
+    bit<4>    version;
+    bit<4>    ihl;
+    bit<8>    diffserv;
+    bit<16>   totalLen;
+    bit<16>   identification;
+    bit<3>    flags;
+    bit<13>   fragOffset;
+    bit<8>    ttl;
+    bit<8>    protocol;
+    bit<16>   hdrChecksum;
+    ip4Addr_t srcAddr;
+    ip4Addr_t dstAddr;
 }
 
 struct metadata {
-    bit<14> ecmp_select;
+    /* empty */
 }
 
 struct headers {
-    ethernet_t ethernet;
-    ipv4_t     ipv4;
-    tcp_t      tcp;
+    ethernet_t   ethernet;
+    myTunnel_t   myTunnel;
+    ipv4_t       ipv4;
 }
 
 /*************************************************************************
@@ -59,36 +58,43 @@ parser MyParser(packet_in packet,
                 out headers hdr,
                 inout metadata meta,
                 inout standard_metadata_t standard_metadata) {
+
     state start {
         transition parse_ethernet;
     }
+
     state parse_ethernet {
         packet.extract(hdr.ethernet);
         transition select(hdr.ethernet.etherType) {
-            0x800: parse_ipv4;
+            TYPE_MYTUNNEL: parse_myTunnel;
+            TYPE_IPV4: parse_ipv4;
             default: accept;
         }
     }
+
+    state parse_myTunnel {
+        packet.extract(hdr.myTunnel);
+        transition select(hdr.myTunnel.proto_id) {
+            TYPE_IPV4: parse_ipv4;
+            default: accept;
+        }
+    }
+
     state parse_ipv4 {
         packet.extract(hdr.ipv4);
-        transition select(hdr.ipv4.protocol) {
-            6: parse_tcp;
-            default: accept;
-        }
-    }
-    state parse_tcp {
-        packet.extract(hdr.tcp);
         transition accept;
     }
+
 }
 
 /*************************************************************************
 ************   C H E C K S U M    V E R I F I C A T I O N   *************
 *************************************************************************/
 
-control MyVerifyChecksum(inout headers hdr, inout metadata meta) {
-    apply { }
+control MyVerifyChecksum(inout headers hdr, inout metadata meta) {   
+    apply {  }
 }
+
 
 /*************************************************************************
 **************  I N G R E S S   P R O C E S S I N G   *******************
@@ -98,66 +104,76 @@ control MyIngress(inout headers hdr,
                   inout metadata meta,
                   inout standard_metadata_t standard_metadata) {
 
+    counter(MAX_TUNNEL_ID, CounterType.packets_and_bytes) ingressTunnelCounter;
+    counter(MAX_TUNNEL_ID, CounterType.packets_and_bytes) egressTunnelCounter;
+
     action drop() {
         mark_to_drop(standard_metadata);
     }
-    action set_ecmp_select(bit<16> ecmp_base, bit<32> ecmp_count) {
-        /* TODO: hash on 5-tuple and save the hash result in meta.ecmp_select
-           so that the ecmp_nhop table can use itn to make a forwardig decision accordingly */
-           //计算五元组的哈希值，存储在meta.ecmp_select
-           hash(
-               //输出
-               meta.ecmp_select,
-               //哈希算法
-               HashAlgorithm.crc16,
-               //base
-               ecmp_base,
-               //源IP、目的IP、IP协议、源TCP端口、目的TCP端口组成的5元组
-               {
-                   hdr.ipv4.srcAddr,
-                   hdr.ipv4.dstAddr,
-                   hdr.ipv4.protocol,
-                   hdr.tcp.srcPort,
-                   hdr.tcp.dstPort
-               },
-               //max
-               ecmp_count
-               );
-    }
-    action set_nhop(bit<48> nhop_dmac, bit<32> nhop_ipv4, bit<9> port) {
-        hdr.ethernet.dstAddr = nhop_dmac;
-        hdr.ipv4.dstAddr = nhop_ipv4;
+    
+    action ipv4_forward(macAddr_t dstAddr, egressSpec_t port) {
         standard_metadata.egress_spec = port;
+        hdr.ethernet.srcAddr = hdr.ethernet.dstAddr;
+        hdr.ethernet.dstAddr = dstAddr;
         hdr.ipv4.ttl = hdr.ipv4.ttl - 1;
     }
-    table ecmp_group {
+
+    action myTunnel_ingress(bit<16> dst_id) {
+        hdr.myTunnel.setValid();
+        hdr.myTunnel.dst_id = dst_id;
+        hdr.myTunnel.proto_id = hdr.ethernet.etherType;
+        hdr.ethernet.etherType = TYPE_MYTUNNEL;
+        ingressTunnelCounter.count((bit<32>) hdr.myTunnel.dst_id);
+    }
+
+    action myTunnel_forward(egressSpec_t port) {
+        standard_metadata.egress_spec = port;
+    }
+
+    action myTunnel_egress(macAddr_t dstAddr, egressSpec_t port) {
+        standard_metadata.egress_spec = port;
+        hdr.ethernet.dstAddr = dstAddr;
+        hdr.ethernet.etherType = hdr.myTunnel.proto_id;
+        hdr.myTunnel.setInvalid();
+        egressTunnelCounter.count((bit<32>) hdr.myTunnel.dst_id);
+    }
+
+    table ipv4_lpm {
         key = {
             hdr.ipv4.dstAddr: lpm;
         }
         actions = {
+            ipv4_forward;
+            myTunnel_ingress;
             drop;
-            set_ecmp_select;
+            NoAction;
         }
         size = 1024;
+        default_action = NoAction();
     }
-    table ecmp_nhop {
+
+    table myTunnel_exact {
         key = {
-            meta.ecmp_select: exact;
+            hdr.myTunnel.dst_id: exact;
         }
         actions = {
+            myTunnel_forward;
+            myTunnel_egress;
             drop;
-            set_nhop;
         }
-        size = 2;
+        size = 1024;
+        default_action = drop();
     }
+
     apply {
-        /* TODO: apply ecmp_group table and ecmp_nhop table if IPv4 header is
-         * valid and TTL hasn't reached zero
-         */
-         //如果数据包是ipv4头部有效且存活时间大于0，应用这两个表
-         if (hdr.ipv4.isValid() && hdr.ipv4.ttl > 0) {
-            ecmp_group.apply();
-            ecmp_nhop.apply();
+        if (hdr.ipv4.isValid() && !hdr.myTunnel.isValid()) {
+            // Process only non-tunneled IPv4 packets.
+            ipv4_lpm.apply();
+        }
+
+        if (hdr.myTunnel.isValid()) {
+            // Process all tunneled packets.
+            myTunnel_exact.apply();
         }
     }
 }
@@ -169,38 +185,19 @@ control MyIngress(inout headers hdr,
 control MyEgress(inout headers hdr,
                  inout metadata meta,
                  inout standard_metadata_t standard_metadata) {
-
-    action rewrite_mac(bit<48> smac) {
-        hdr.ethernet.srcAddr = smac;
-    }
-    action drop() {
-        mark_to_drop(standard_metadata);
-    }
-    table send_frame {
-        key = {
-            standard_metadata.egress_port: exact;
-        }
-        actions = {
-            rewrite_mac;
-            drop;
-        }
-        size = 256;
-    }
-    apply {
-        send_frame.apply();
-    }
+    apply {  }
 }
 
 /*************************************************************************
 *************   C H E C K S U M    C O M P U T A T I O N   **************
 *************************************************************************/
 
-control MyComputeChecksum(inout headers hdr, inout metadata meta) {
+control MyComputeChecksum(inout headers  hdr, inout metadata meta) {
      apply {
-        update_checksum(
-            hdr.ipv4.isValid(),
+	update_checksum(
+	    hdr.ipv4.isValid(),
             { hdr.ipv4.version,
-              hdr.ipv4.ihl,
+	      hdr.ipv4.ihl,
               hdr.ipv4.diffserv,
               hdr.ipv4.totalLen,
               hdr.ipv4.identification,
@@ -222,8 +219,8 @@ control MyComputeChecksum(inout headers hdr, inout metadata meta) {
 control MyDeparser(packet_out packet, in headers hdr) {
     apply {
         packet.emit(hdr.ethernet);
+        packet.emit(hdr.myTunnel);
         packet.emit(hdr.ipv4);
-        packet.emit(hdr.tcp);
     }
 }
 

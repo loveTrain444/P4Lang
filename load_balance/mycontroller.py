@@ -16,31 +16,52 @@ import p4runtime_lib.bmv2
 from p4runtime_lib.switch import ShutdownAllSwitchConnections
 import p4runtime_lib.helper
 
-
-def writeIpv4Rules(p4info_helper, ingress_sw, dst_ip_addr, dstAddr, port):
+def writeDropRules(p4info_helper, ingress_sw):
 
     table_entry = p4info_helper.buildTableEntry(
-        table_name="MyIngress.ipv4_lpm",
+        table_name="MyIngress.ecmp_group",
+        default_action= "true",
+        action_name="MyIngress.drop",
+        action_params={
+        })
+    ingress_sw.WriteTableEntry(table_entry)
+
+def writeEcmpGroupRules(p4info_helper, ingress_sw, dst_ip_addr, ecmp_base, ecmp_count):
+    table_entry = p4info_helper.buildTableEntry(
+        table_name="MyIngress.ecmp_group",
         match_fields={
             "hdr.ipv4.dstAddr": dst_ip_addr
         },
-        action_name="MyIngress.ipv4_forward",
+        action_name="MyIngress.set_ecmp_select",
         action_params={
-            "dstAddr": dstAddr,
-            "port" : port
+           "ecmp_base": ecmp_base,
+           "ecmp_count":ecmp_count
         })
     ingress_sw.WriteTableEntry(table_entry)
-
-def writeSwtraceRules(p4info_helper, ingress_sw,swid):
-
+def writeEcmpNhopRules(p4info_helper, ingress_sw, ecmp_select, nhop_dmac, nhop_ipv4,port):
     table_entry = p4info_helper.buildTableEntry(
-        table_name="MyEgress.swtrace",
-    
-        action_name="MyEgress.add_swtrace",
+        table_name="MyIngress.ecmp_nhop",
+        match_fields={
+            "meta.ecmp_select": ecmp_select
+        },
+        action_name="MyIngress.set_nhop",
         action_params={
-            "swid": swid
+            "nhop_dmac": nhop_dmac,
+            "nhop_ipv4": nhop_ipv4,
+	        "port" : port
         })
     ingress_sw.WriteTableEntry(table_entry)
+def writeSendFrameRules(p4info_helper, egress_sw, egress_port,smac):
+    table_entry = p4info_helper.buildTableEntry(
+        table_name="MyEgress.send_frame",
+        match_fields={
+            "standard_metadata.egress_port": egress_port
+        },
+        action_name="MyEgress.rewrite_mac",
+        action_params={
+            "smac": smac
+        })
+    egress_sw.WriteTableEntry(table_entry)
 
 
 def readTableRules(p4info_helper, sw):
@@ -115,27 +136,26 @@ def main(p4info_file_path, bmv2_file_path):
 
         s3.SetForwardingPipelineConfig(p4info=p4info_helper.p4info,
                                        bmv2_json_file_path=bmv2_file_path)
-        print("Installed P4 Program using SetForwardingPipelineConfig on s2")
+        print("Installed P4 Program using SetForwardingPipelineConfig on s3")
 
         # Write the rules of s1
-        writeIpv4Rules(p4info_helper, ingress_sw=s1, dst_ip_addr=("10.0.1.11",32),dstAddr="08:00:00:00:01:11", port=1)
-        writeIpv4Rules(p4info_helper, ingress_sw=s1, dst_ip_addr=("10.0.1.1",32),dstAddr="08:00:00:00:01:01", port=2)
-        writeIpv4Rules(p4info_helper, ingress_sw=s1, dst_ip_addr=("10.0.2.0",24),dstAddr="08:00:00:00:02:00", port=3)
-        writeIpv4Rules(p4info_helper, ingress_sw=s1, dst_ip_addr=("10.0.3.0",24),dstAddr="08:00:00:00:03:00", port=4)
-        writeSwtraceRules(p4info_helper, ingress_sw=s1, swid = 1)
+        writeDropRules(p4info_helper, s1)
+        writeEcmpGroupRules(p4info_helper, ingress_sw=s1, dst_ip_addr=("10.0.0.1",32),ecmp_base=0, ecmp_count=2)
+        writeEcmpNhopRules(p4info_helper, ingress_sw=s1, ecmp_select=0,nhop_dmac="00:00:00:00:01:02", nhop_ipv4="10.0.2.2",port=2)
+        writeEcmpNhopRules(p4info_helper, ingress_sw=s1, ecmp_select=1,nhop_dmac="00:00:00:00:01:03", nhop_ipv4="10.0.3.3",port=3)
+        writeSendFrameRules(p4info_helper, egress_sw=s1, egress_port=2,smac="00:00:00:01:02:00")
+        writeSendFrameRules(p4info_helper, egress_sw=s1, egress_port=3,smac="00:00:00:01:03:00")
         
         # Write the rules of s2
-        writeIpv4Rules(p4info_helper, ingress_sw=s2, dst_ip_addr=("10.0.2.22",32),dstAddr="08:00:00:00:02:22", port=1)
-        writeIpv4Rules(p4info_helper, ingress_sw=s2, dst_ip_addr=("10.0.2.2",32),dstAddr="08:00:00:00:02:02", port=2)
-        writeIpv4Rules(p4info_helper, ingress_sw=s2, dst_ip_addr=("10.0.1.0",24),dstAddr="08:00:00:00:01:00", port=3)
-        writeIpv4Rules(p4info_helper, ingress_sw=s2, dst_ip_addr=("10.0.3.0",24),dstAddr="08:00:00:00:03:00", port=4)
-        writeSwtraceRules(p4info_helper, ingress_sw=s2, swid = 2)
-        
+        writeDropRules(p4info_helper, s2)
+        writeEcmpGroupRules(p4info_helper, ingress_sw=s2, dst_ip_addr=("10.0.2.2",32),ecmp_base=0, ecmp_count=1)
+        writeEcmpNhopRules(p4info_helper, ingress_sw=s2, ecmp_select=0,nhop_dmac="08:00:00:00:02:02", nhop_ipv4="10.0.2.2",port=1)
+        writeSendFrameRules(p4info_helper, egress_sw=s2, egress_port=1,smac="00:00:00:02:01:00")
         # Write the rules of s3
-        writeIpv4Rules(p4info_helper, ingress_sw=s3, dst_ip_addr=("10.0.3.3",32),dstAddr="08:00:00:00:03:03", port=1)
-        writeIpv4Rules(p4info_helper, ingress_sw=s3, dst_ip_addr=("10.0.1.0",24),dstAddr="08:00:00:00:01:00", port=2)
-        writeIpv4Rules(p4info_helper, ingress_sw=s3, dst_ip_addr=("10.0.2.0",24),dstAddr="08:00:00:00:02:00", port=3)
-        writeSwtraceRules(p4info_helper, ingress_sw=s3, swid = 3)
+        writeDropRules(p4info_helper, s3)
+        writeEcmpGroupRules(p4info_helper, ingress_sw=s3, dst_ip_addr=("10.0.3.3",32),ecmp_base=0, ecmp_count=1)
+        writeEcmpNhopRules(p4info_helper, ingress_sw=s3, ecmp_select=0,nhop_dmac="08:00:00:00:03:03", nhop_ipv4="10.0.3.3",port=1)
+        writeSendFrameRules(p4info_helper, egress_sw=s3, egress_port=1,smac="00:00:00:03:01:00")
   
         readTableRules(p4info_helper, s1)
         readTableRules(p4info_helper, s2)
@@ -156,10 +176,10 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='P4Runtime Controller')
     parser.add_argument('--p4info', help='p4info proto in text format from p4c',
                         type=str, action="store", required=False,
-                        default='./build/mri.p4.p4info.txt')
+                        default='./build/load_balance.p4.p4info.txt')
     parser.add_argument('--bmv2-json', help='BMv2 JSON file from p4c',
                         type=str, action="store", required=False,
-                        default='./build/mri.json')
+                        default='./build/load_balance.json')
     args = parser.parse_args()
 
     if not os.path.exists(args.p4info):
