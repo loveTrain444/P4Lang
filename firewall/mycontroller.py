@@ -39,12 +39,12 @@ def write_ipv4_lpm_table(p4info_helper, ingress_sw, dst_ip_addr, dstAddr, port):
         })
     ingress_sw.WriteTableEntry(table_entry)
     
-def write_check_ports_table(p4info_helper, ingress_sw, ingress_port, engress_spec, dir):
+def write_check_ports_table(p4info_helper, ingress_sw, ingress_port, egress_spec, dir):
     table_entry = p4info_helper.buildTableEntry(
         table_name="MyIngress.check_ports",
         match_fields={
             "standard_metadata.ingress_port": ingress_port,
-            "standard_metadata.egress_spec": engress_spec
+            "standard_metadata.egress_spec": egress_spec
         },
         action_name="MyIngress.set_direction",
         action_params={
@@ -136,14 +136,14 @@ def main(p4info_file_path, bmv2_file_path):
         print("Installed P4 Program using SetForwardingPipelineConfig on s4")
         # Write the rules of s1
         writeDropRules(p4info_helper, s1)
-        write_check_ports_table(p4info_helper, ingress_sw=s1, ingress_port=1, engress_spec=3, dir=0)
-        write_check_ports_table(p4info_helper, ingress_sw=s1, ingress_port=1, engress_spec=4, dir=0)
-        write_check_ports_table(p4info_helper, ingress_sw=s1, ingress_port=2, engress_spec=3, dir=0)
-        write_check_ports_table(p4info_helper, ingress_sw=s1, ingress_port=2, engress_spec=4, dir=0)
-        write_check_ports_table(p4info_helper, ingress_sw=s1, ingress_port=3, engress_spec=1, dir=1)
-        write_check_ports_table(p4info_helper, ingress_sw=s1, ingress_port=3, engress_spec=2, dir=1)
-        write_check_ports_table(p4info_helper, ingress_sw=s1, ingress_port=4, engress_spec=1, dir=1)
-        write_check_ports_table(p4info_helper, ingress_sw=s1, ingress_port=4, engress_spec=2, dir=1)
+        write_check_ports_table(p4info_helper, ingress_sw=s1, ingress_port=1, egress_spec=3, dir=0)
+        write_check_ports_table(p4info_helper, ingress_sw=s1, ingress_port=1, egress_spec=4, dir=0)
+        write_check_ports_table(p4info_helper, ingress_sw=s1, ingress_port=2, egress_spec=3, dir=0)
+        write_check_ports_table(p4info_helper, ingress_sw=s1, ingress_port=2, egress_spec=4, dir=0)
+        write_check_ports_table(p4info_helper, ingress_sw=s1, ingress_port=3, egress_spec=1, dir=1)
+        write_check_ports_table(p4info_helper, ingress_sw=s1, ingress_port=3, egress_spec=2, dir=1)
+        write_check_ports_table(p4info_helper, ingress_sw=s1, ingress_port=4, egress_spec=1, dir=1)
+        write_check_ports_table(p4info_helper, ingress_sw=s1, ingress_port=4, egress_spec=2, dir=1)
 
         write_ipv4_lpm_table(p4info_helper, ingress_sw=s1, dst_ip_addr=("10.0.1.1", 32), dstAddr="08:00:00:00:01:11", port=1)
         write_ipv4_lpm_table(p4info_helper, ingress_sw=s1, dst_ip_addr=("10.0.2.2", 32), dstAddr="08:00:00:00:02:22", port=2)
